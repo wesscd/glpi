@@ -51,6 +51,9 @@ a2ensite glpi.conf
 
 systemctl restart apache2
 
+echo -e "* *\t* * *\troot\tphp /var/www/html/glpi/front/cron.php" >> /etc/crontab
+
+
 # Limpar arquivos temporários
 rm /tmp/glpi.tar.gz
 
