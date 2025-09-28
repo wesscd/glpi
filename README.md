@@ -156,8 +156,8 @@ sudo ./glpi_uninstall.sh
 1. **Clonar o Repositório**:
 
    ```bash
-   git clone https://github.com/seu-usuario/GLPI-Scripts.git
-   cd GLPI-Scripts
+   git clone https://github.com/wesscd/glpi.git
+   cd glpi
    ```
 
 2. **Instalar o GLPI**:
