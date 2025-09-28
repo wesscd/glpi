@@ -265,11 +265,13 @@ setup_database() {
 setup_apache() {
     local server_name=$1
     local base_path=$2
+    local disable_default=${3:-false}  # Use true para desabilitar o 000-default.conf
 
     log "INFO" "Configurando Apache..."
-    if [ ! -f /etc/apache2/sites-available/glpi.conf ]; then
-        if [ "$base_path" = "/" ]; then
-            cat <<EOF > /etc/apache2/sites-available/glpi.conf
+
+    if [ "$base_path" = "/" ]; then
+        # GLPI na raiz: criar glpi.conf separado
+        cat <<EOF > /etc/apache2/sites-available/glpi.conf
 <VirtualHost *:80>
     ServerName $server_name
     ServerAdmin webmaster@localhost
@@ -280,48 +282,42 @@ setup_apache() {
 
     <Directory /var/www/html/glpi/public>
         Require all granted
+        AllowOverride All
         RewriteEngine On
-        RewriteCond %{HTTP:Authorization} ^(.+)$
+        RewriteCond %{HTTP:Authorization} ^(.+)\$
         RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
         RewriteCond %{REQUEST_FILENAME} !-f
         RewriteRule ^(.*)$ index.php [QSA,L]
     </Directory>
 </VirtualHost>
 EOF
-        else
-            cat <<EOF > /etc/apache2/sites-available/glpi.conf
-<VirtualHost *:80>
-    ServerName $server_name
-    ServerAdmin webmaster@localhost
-    DocumentRoot /var/www/html
 
-    Alias $base_path /var/www/html/glpi/public
-
-    ErrorLog \${APACHE_LOG_DIR}/error.log
-    CustomLog \${APACHE_LOG_DIR}/access.log combined
-
-    <Directory /var/www/html/glpi/public>
-        Require all granted
-        RewriteEngine On
-        RewriteCond %{HTTP:Authorization} ^(.+)$
-        RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
-        RewriteCond %{REQUEST_FILENAME} !-f
-        RewriteRule ^(.*)$ index.php [QSA,L]
-    </Directory>
-</VirtualHost>
-EOF
-        fi
-
-        read -p "Deseja desabilitar o site default do Apache (000-default.conf)? (s/n): " disable_default
-        if [[ "$disable_default" =~ ^[sS]$ ]]; then
+        if [ "$disable_default" = true ]; then
             a2dissite 000-default.conf || error_exit "Falha ao desabilitar site default."
         fi
 
         a2enmod rewrite || error_exit "Falha ao habilitar módulo rewrite."
         a2ensite glpi.conf || error_exit "Falha ao ativar site glpi.conf."
-        systemctl reload apache2 || error_exit "Erro ao recarregar o Apache."
+
+    else
+        # GLPI em subdiretório: usar apenas 000-default.conf
+        # Verifica se existe
+        if [ ! -f /etc/apache2/sites-available/000-default.conf ]; then
+            error_exit "000-default.conf não encontrado!"
+        fi
+
+        # Adiciona configuração do GLPI no 000-default.conf
+        if ! grep -q "Directory /var/www/html/glpi/public" /etc/apache2/sites-available/000-default.conf; then
+            sed -i "/<\/VirtualHost>/i \
+\n    # Configuração GLPI\n    <Directory /var/www/html/glpi/public>\n        Require all granted\n        AllowOverride All\n        RewriteEngine On\n        RewriteCond %{HTTP:Authorization} ^(.+)\$\n        RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]\n        RewriteCond %{REQUEST_FILENAME} !-f\n        RewriteRule ^(.*)$ index.php [QSA,L]\n    </Directory>\n" /etc/apache2/sites-available/000-default.conf
+        fi
+
+        a2enmod rewrite || error_exit "Falha ao habilitar módulo rewrite."
     fi
+
+    systemctl reload apache2 || error_exit "Erro ao recarregar o Apache."
 }
+
 
 # Função para configurar o cron do GLPI
 setup_cron() {
