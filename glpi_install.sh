@@ -299,7 +299,7 @@ EOF
         a2enmod rewrite || error_exit "Falha ao habilitar módulo rewrite."
         a2ensite glpi.conf || error_exit "Falha ao ativar site glpi.conf."
 
-    else
+    else if [ "$base_path" = "/glpi" ]; then
         # GLPI em subdiretório: usar apenas 000-default.conf
         # Verifica se existe
         if [ ! -f /etc/apache2/sites-available/000-default.conf ]; then
