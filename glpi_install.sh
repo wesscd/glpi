@@ -264,10 +264,45 @@ setup_database() {
 # Função para configurar o Apache
 setup_apache() {
     local server_name=$1
-    local base_path=$2
-    local disable_default=${3:-false}  # Use true para desabilitar o 000-default.conf
+    local disable_default=${2:-false}  # Use true para desabilitar o 000-default.conf
+    local base_path
 
     log "INFO" "Configurando Apache..."
+
+    # Validação do server_name
+    if [ -z "$server_name" ]; then
+        error_exit "server_name não pode estar vazio."
+    fi
+
+    # Menu interativo para selecionar base_path
+    echo "Selecione onde o GLPI será instalado:"
+    PS3="Digite o número da opção: "
+    options=("/" "/glpi")
+    select opt in "${options[@]}"; do
+        case $opt in
+            "/")
+                base_path="/"
+                break
+                ;;
+            "/glpi")
+                base_path="/glpi"
+                break
+                ;;
+            *)
+                echo "Opção inválida. Por favor, escolha 1 ou 2."
+                ;;
+        esac
+    done
+
+    log "DEBUG" "server_name: $server_name, base_path: $base_path, disable_default: $disable_default"
+
+    # Verificar se o diretório do GLPI existe
+    if [ ! -d "/var/www/html/glpi/public" ]; then
+        error_exit "Diretório /var/www/html/glpi/public não encontrado."
+    fi
+
+    # Habilitar módulo rewrite (comum a ambos os casos)
+    a2enmod rewrite || error_exit "Falha ao habilitar módulo rewrite."
 
     if [ "$base_path" = "/" ]; then
         # GLPI na raiz: criar glpi.conf separado
@@ -292,32 +327,68 @@ setup_apache() {
 </VirtualHost>
 EOF
 
+        # Definir permissões do arquivo
+        chown root:root /etc/apache2/sites-available/glpi.conf
+        chmod 644 /etc/apache2/sites-available/glpi.conf
+
         if [ "$disable_default" = true ]; then
             a2dissite 000-default.conf || error_exit "Falha ao desabilitar site default."
         fi
 
-        a2enmod rewrite || error_exit "Falha ao habilitar módulo rewrite."
         a2ensite glpi.conf || error_exit "Falha ao ativar site glpi.conf."
 
-    else if [ "$base_path" = "/glpi" ]; then
+    elif [ "$base_path" = "/glpi" ]; then
         # GLPI em subdiretório: usar apenas 000-default.conf
-        # Verifica se existe
         if [ ! -f /etc/apache2/sites-available/000-default.conf ]; then
             error_exit "000-default.conf não encontrado!"
         fi
 
+        # Criar backup do 000-default.conf
+        cp /etc/apache2/sites-available/000-default.conf /etc/apache2/sites-available/000-default.conf.bak || error_exit "Falha ao criar backup do 000-default.conf."
+
+        # Log do conteúdo atual do 000-default.conf para depuração
+        log "DEBUG" "Conteúdo atual de 000-default.conf:"
+        log "DEBUG" "$(cat /etc/apache2/sites-available/000-default.conf)"
+
         # Adiciona configuração do GLPI no 000-default.conf
         if ! grep -q "Directory /var/www/html/glpi/public" /etc/apache2/sites-available/000-default.conf; then
-            sed -i "/<\/VirtualHost>/i \
-\n    # Configuração GLPI\n    <Directory /var/www/html/glpi/public>\n        Require all granted\n        AllowOverride All\n        RewriteEngine On\n        RewriteCond %{HTTP:Authorization} ^(.+)\$\n        RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]\n        RewriteCond %{REQUEST_FILENAME} !-f\n        RewriteRule ^(.*)$ index.php [QSA,L]\n    </Directory>\n" /etc/apache2/sites-available/000-default.conf
+            # Criar um arquivo temporário para a nova configuração
+            local temp_file=$(mktemp)
+            # Copiar tudo até antes do </VirtualHost>
+            sed -n '/<\/VirtualHost>/q;p' /etc/apache2/sites-available/000-default.conf > "$temp_file"
+            # Adicionar a configuração do GLPI
+            cat <<EOF >> "$temp_file"
+    # Configuração GLPI
+    <Directory /var/www/html/glpi/public>
+        Require all granted
+        AllowOverride All
+        RewriteEngine On
+        RewriteCond %{HTTP:Authorization} ^(.+)\$
+        RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteRule ^(.*)$ index.php [QSA,L]
+    </Directory>
+EOF
+            # Adicionar o </VirtualHost> ao final
+            echo "</VirtualHost>" >> "$temp_file"
+            # Substituir o arquivo original
+            mv "$temp_file" /etc/apache2/sites-available/000-default.conf || error_exit "Falha ao atualizar 000-default.conf."
         fi
 
-        a2enmod rewrite || error_exit "Falha ao habilitar módulo rewrite."
+        # Log do conteúdo atualizado do 000-default.conf para depuração
+        log "DEBUG" "Conteúdo atualizado de 000-default.conf:"
+        log "DEBUG" "$(cat /etc/apache2/sites-available/000-default.conf)"
     fi
 
-    systemctl reload apache2 || error_exit "Erro ao recarregar o Apache."
-}
+    # Verificar configuração do Apache
+    apache2ctl configtest || error_exit "Erro na configuração do Apache."
 
+    # Recarregar Apache
+    systemctl is-active --quiet apache2 || systemctl start apache2 || error_exit "Erro ao iniciar o Apache."
+    systemctl reload apache2 || error_exit "Erro ao recarregar o Apache."
+
+    log "INFO" "Apache configurado com sucesso para GLPI em $base_path."
+}
 
 # Função para configurar o cron do GLPI
 setup_cron() {
